@@ -27,7 +27,7 @@ void pri_queue_init(pri_queue* q)
 	q->head = 0;
 }
 
-void pri_queue_free(pri_queue* q)
+void pri_queue_free(pri_queue* q, int freeValues)
 {
 	if (!q)
 		return;
@@ -37,6 +37,10 @@ void pri_queue_free(pri_queue* q)
 	while (n)
 	{
 		struct pri_queue_node* next = n->next;
+
+		if (freeValues && n->value) {
+			free(n->value);
+		}
 
 		// delete
 		free(n);

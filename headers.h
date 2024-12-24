@@ -81,12 +81,18 @@ typedef struct process_data {
 	int arrival_time;
 	int running_time;
 	int priority;
+	int mem_size;
 } process_data;
 
 typedef struct process_message_buffer {
 	long type;
 	struct process_data data;
 } process_message_buffer;
+
+typedef struct process_registration_data {
+	process_data data;
+	int algorithm;
+} process_registration_data;
 
 #define SCHEDULING_ALGO_HPF 1
 #define SCHEDULING_ALGO_SJF 0

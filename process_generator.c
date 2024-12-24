@@ -90,7 +90,7 @@ int main(int argc, char* argv[]) {
 	wait(NULL);
 
 exit:
-	pri_queue_free(&processesQueue);
+	pri_queue_free(&processesQueue, 0);
 	
 	// invoke our own handler for now?
 	raise(SIGINT);
@@ -137,11 +137,11 @@ int read_processes(pri_queue* processes, int* count, char* filename) {
 		memset(p, 0, sizeof(process_data));
 
 		// read proc data
-		sscanf(line, "%d%d%d%d", &p->id, &p->arrival_time, &p->running_time, &p->priority);
+		sscanf(line, "%d%d%d%d%d", &p->id, &p->arrival_time, &p->running_time, &p->priority, &p->mem_size);
 
 		// insert in queue
 		pri_queue_enqueue(processes, p->arrival_time, p);
-		printf("Process with id %d, arrivaltime %d, remainingtime %d, priority %d\n", p->id, p->arrival_time, p->running_time, p->priority);
+		printf("Process with id %d, arrivaltime %d, remainingtime %d, priority %d memsize %d\n", p->id, p->arrival_time, p->running_time, p->priority, p->mem_size);
 
 		if (count) {
 			(*count)++;

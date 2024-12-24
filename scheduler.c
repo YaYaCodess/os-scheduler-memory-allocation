@@ -2,13 +2,14 @@
 #include "pri_queue.h"
 #include "doubly_linked_list.h"
 #include "pcb.h"
-
+#include "mem.h"
 #include <math.h>
 
 int initialize_message_queue();
-int register_process_control_block(process_data* data, int algorithm, /*out*/ process_control_block** pcbEntry);
+int register_process_control_block(process_data* data, int algorithm, memory_cell* cell, /*out*/ process_control_block** pcbEntry);
 int fork_process(process_control_block* pcb);
 process_control_block* process_table_find_pcb_from_system(int systemPid);
+int register_process_data(process_data data, int algorithm, int enqueueRegData, int* allocated);
 
 // schedule algos
 void sched_hpf();
@@ -22,8 +23,11 @@ void process_running_time_handler(int);
 
 void log_data(process_control_block*);
 void log_perf();
+void log_memory(process_control_block* pcb, int allocated);
 
 key_t process_msgq_id;
+
+memory_cell* mem;
 
 // all processes reside here
 doubly_linked_list process_table;
@@ -32,6 +36,9 @@ int terminated_processes_count;
 
 pri_queue process_queue;
 process_control_block* running_process;
+
+pri_queue process_memory_queue;
+
 
 int last_change_time;
 
@@ -90,10 +97,13 @@ int main(int argc, char** argv) {
 	// delete old log files
 	remove("scheduler.log");
 	remove("scheduler.perf");
+	remove("memory.log");
+
 
 	// init queue & table
 	doubly_linked_list_init(&process_table);
 	pri_queue_init(&process_queue);
+	pri_queue_init(&process_memory_queue);
 
 	// init mlfq queues
 	if (algorithm == SCHEDULING_ALGO_MLFQ) {
@@ -104,6 +114,10 @@ int main(int argc, char** argv) {
 			pri_queue_init(&mlfq_queues[i]);
 		}
 	}
+
+	// init memory
+	int globalMemIdx = 0;
+	mem = memory_cell_create(1024, &globalMemIdx);
 
 	if (!initialize_message_queue()) {
 		perror("Msg queue init failed");
@@ -139,10 +153,10 @@ int main(int argc, char** argv) {
 				// we have a new process
 				// enqueue process!
 
-				printf("[Scheduler] %d - Received new proc, pid=%d, at=%d, rt=%d\n", getClk(), msgBuffer.data.id, msgBuffer.data.arrival_time, msgBuffer.data.running_time);
+				printf("[Scheduler] %d - Received new proc, pid=%d, at=%d, rt=%d mem=%d\n", getClk(), msgBuffer.data.id, msgBuffer.data.arrival_time, msgBuffer.data.running_time, msgBuffer.data.mem_size);
 
 				process_control_block* pcb;
-				if (!register_process_control_block(&msgBuffer.data, algorithm, &pcb)) {
+				if (!register_process_data(msgBuffer.data, algorithm, 1, 0)) {
 					// failed
 					perror("Cannot register pcb");
 					goto exit;
@@ -170,8 +184,9 @@ int main(int argc, char** argv) {
 
 exit:
 
-	// output pt
+
 	doubly_linked_list_node* n = process_table.head;
+	int x = 9;
 	while (n) {
 		process_control_block* pcb = (process_control_block*)n->value;
 
@@ -187,12 +202,13 @@ exit:
 
 	// free table & queue
 	doubly_linked_list_free(&process_table);
-	pri_queue_free(&process_queue);
+	pri_queue_free(&process_queue, 0);
+	pri_queue_free(&process_memory_queue, 0);
 
 	// free mlfq queues
 	if (algorithm == SCHEDULING_ALGO_MLFQ) {
 		for (int i = 0; i < 10; i++) {
-			pri_queue_free(&mlfq_queues[i]);
+			pri_queue_free(&mlfq_queues[i], 0);
 		}
 
 		free(mlfq_queues);
@@ -201,6 +217,50 @@ exit:
 	destroyClk(false);
 
 	return 0;
+}
+
+
+int register_process_data(process_data data, int algorithm, int enqueueRegData, int* allocated) {
+	memory_cell* processCell = 0;
+	if (!memory_cell_allocate(mem, MEM_SZ(data.mem_size), &processCell)) {
+		printf("Cant allocate %d %p\n", data.mem_size, (void*)processCell);
+
+		// put in pool
+		if (enqueueRegData) {
+			printf("enqueueing..\n");
+			process_registration_data* regData = (process_registration_data*)malloc(sizeof(process_registration_data));
+			regData->data = data;
+			regData->algorithm = algorithm;
+
+			pri_queue_enqueue(&process_memory_queue, data.mem_size, regData);
+		}
+
+		return 1;
+	}
+
+	// mark allocated
+	if (allocated) {
+		*allocated = 1;
+	}
+
+	process_control_block* pcb;
+	if (!register_process_control_block(&data, algorithm, processCell, &pcb)) {
+		// failed
+		perror("Cannot register pcb");
+		return 0;
+	}
+
+	// schedule algo continues the process
+
+	if (!fork_process(pcb)) {
+		perror("Cannot run process");
+		return 0;
+	}
+
+	// output to log
+	log_memory(pcb, 1);
+
+	return 1;
 }
 
 /// Initializes the Gen-Sched msg queue
@@ -215,8 +275,8 @@ int initialize_message_queue() {
 }
 
 /// Registers a process in the process table as a PCB
-int register_process_control_block(process_data* data, int algorithm, /*out*/ process_control_block** pcbEntry) {
-	if (!data) {
+int register_process_control_block(process_data* data, int algorithm, memory_cell* cell, /*out*/ process_control_block** pcbEntry)  {
+	if (!data || !cell) {
 		return 0;
 	}
 
@@ -233,6 +293,10 @@ int register_process_control_block(process_data* data, int algorithm, /*out*/ pr
 	pcb->running_time = data->running_time;
 
 	pcb->arrival_time = data->arrival_time;
+
+	// mem
+	pcb->mem_size = data->mem_size;
+	pcb->mem_cell = cell;
 
 	// not started yet
 	pcb->system.proc_pid = -1;
@@ -641,6 +705,29 @@ void process_termination_handler(int sig) {
 		running_process = 0;
 	}
 
+	// free memory cell
+	if (!memory_cell_free(pcb->mem_cell)) {
+		perror("FATAL ERROR, cant free memory cell?");
+		exit(-1);
+	}
+
+	// output to log
+	log_memory(pcb, 0);
+
+	// try register process from queue
+	process_registration_data* regData;
+	int allocated = 0;
+	while (pri_queue_peek(&process_memory_queue, &regData) && register_process_data(regData->data, regData->algorithm, 0, &allocated) && allocated) {
+		// valid, abdo is happy
+		pri_queue_dequeue(&process_memory_queue, &regData);
+
+		// set allocated to 0 again
+		allocated = 0;
+
+		printf("re-regged %d from memqueue\n", regData->data.id);
+	}
+
+
 	terminated_processes_count++;
 }
 
@@ -740,6 +827,24 @@ void log_perf() {
 
 	FILE* f = fopen("scheduler.perf", "w");
 	fprintf(f, "CPU Utilization = %.2f%%\nAvg WTA = %.2f\nAvg Waiting = %.2f\nStd WTA = %.2f\n", utilization * 100.f, avgWTA, avgWaiting, stdWTA);
+
+	fclose(f);
+}
+
+
+void log_memory(process_control_block* pcb, int allocated) {
+	if (!pcb) return;
+
+	FILE* f = fopen("memory.log", "a");
+
+	char* state = allocated ? "allocated" : "freed";
+	char* desc = allocated ? "for" : "from";
+
+	int start = -1, end = -1;
+	memory_cell_get_indices(pcb->mem_cell, &start, &end);
+
+	fprintf(f, "At time %d\t%s %d bytes\t%s process %d from %d to %d\n",
+		getClk(), state, pcb->mem_size, desc, pcb->pid, start, end);
 
 	fclose(f);
 }
