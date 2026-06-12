@@ -155,18 +155,9 @@ int main(int argc, char** argv) {
 
 				printf("[Scheduler] %d - Received new proc, pid=%d, at=%d, rt=%d mem=%d\n", getClk(), msgBuffer.data.id, msgBuffer.data.arrival_time, msgBuffer.data.running_time, msgBuffer.data.mem_size);
 
-				process_control_block* pcb;
 				if (!register_process_data(msgBuffer.data, algorithm, 1, 0)) {
-					// failed
-					perror("Cannot register pcb");
-					goto exit;
-				}
-
-				// schedule algo continues the process
-
-				if (!fork_process(pcb)) {
-					perror("Cannot run process");
-					goto exit;
+    			perror("Cannot register process");
+    			goto exit;
 				}
 			}
 		} while (canSkip == 0);
